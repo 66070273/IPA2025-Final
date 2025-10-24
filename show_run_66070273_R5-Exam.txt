@@ -1,0 +1,200 @@
+Building configuration...
+
+Current configuration : 3929 bytes
+!
+! Last configuration change at 14:50:21 UTC Fri Oct 17 2025 by NETCONF
+!
+version 16.9
+service timestamps debug datetime msec
+service timestamps log datetime msec
+platform qfp utilization monitor load 80
+no platform punt-keepalive disable-kernel-core
+platform console serial
+!
+hostname R5-Exam
+!
+boot-start-marker
+boot-end-marker
+!
+!
+!
+no aaa new-model
+!
+!
+!
+!
+!
+!
+!
+ip domain name ipa.com
+!
+!
+!
+login on-success log
+!
+!
+!
+!
+!
+!
+!
+subscriber templating
+! 
+! 
+! 
+! 
+!
+multilink bundle-name authenticated
+!
+!
+!
+!
+!
+crypto pki trustpoint TP-self-signed-2612188424
+ enrollment selfsigned
+ subject-name cn=IOS-Self-Signed-Certificate-2612188424
+ revocation-check none
+ rsakeypair TP-self-signed-2612188424
+!
+!
+crypto pki certificate chain TP-self-signed-2612188424
+ certificate self-signed 01
+  30820330 30820218 A0030201 02020101 300D0609 2A864886 F70D0101 05050030 
+  31312F30 2D060355 04031326 494F532D 53656C66 2D536967 6E65642D 43657274 
+  69666963 6174652D 32363132 31383834 3234301E 170D3235 31303037 31303531 
+  32355A17 0D333030 31303130 30303030 305A3031 312F302D 06035504 03132649 
+  4F532D53 656C662D 5369676E 65642D43 65727469 66696361 74652D32 36313231 
+  38383432 34308201 22300D06 092A8648 86F70D01 01010500 0382010F 00308201 
+  0A028201 0100BF09 3299478A 6BE60F06 E59AB16A C5DBAAC5 EB23445A 35A60FBA 
+  44D6FEF9 74A3584E A14F50D8 8F08C03C 978C66D5 761797F0 86D51B6F 69740343 
+  3B30C2D9 133B649E 5BA77881 DC80D996 CEF8E845 17A04B88 9F769778 90076307 
+  A5609435 047988B1 C498AE5D 414A4BA3 D5B4DBA8 25DFF5B1 42FE6C54 2C2DC6C1 
+  E596497B 78D17598 BBDBB16C 5F12E14F FBA84FC2 8FB4C628 02F69946 3BBF8397 
+  B85BA360 400A6A30 12489E8D A12F0E84 211D853D E6CE2289 1EBFD502 21A875F4 
+  FD062B11 4D49C0ED 0DFB7647 9A0ED54E 30C8C03E 1F4410D8 B18746CA 2C0E6B6A 
+  2F093068 64B356B2 304CD6F6 3564FEFB FB0BA73F 5386613A 8AF7CFE2 15B712D1 
+  81F8F508 8E0D0203 010001A3 53305130 0F060355 1D130101 FF040530 030101FF 
+  301F0603 551D2304 18301680 140B1EDB BA312289 E995261F 4C940A49 A39BF5F5 
+  C2301D06 03551D0E 04160414 0B1EDBBA 312289E9 95261F4C 940A49A3 9BF5F5C2 
+  300D0609 2A864886 F70D0101 05050003 82010100 7BA4350D 9349E9D8 0BBFC312 
+  EF885102 B64D22F1 717B7616 B15E27DB 0D76921D C068D50C 76AB3BF2 687CF487 
+  38C63A7B 14336CDC 4DFB5B95 7C388598 00D119E7 2EC06DB7 0A7743DB 1B35EE58 
+  F721ADE7 CEA62D07 23C7FB3A 066C8F86 1E20A3EF 05D7B7B1 ADF8EFA5 958CB72F 
+  22DC7B7E 3F01A5C5 5E79A5CA 4631167B F19BD6AD B32A77B7 FFCA69F3 EF3C9992 
+  DF843171 9E364A59 4993CD16 E6362757 F31F38D0 86E153B5 4B876ADA 4B682E06 
+  0E725589 8C989061 0A613DA4 D6BE48A7 546ED0AC B81FCC70 803FF4C1 834A336B 
+  5CA729D8 F32EC195 AEB89CD0 A15D0214 CC84B1B7 45F99225 9B9EDEA6 0EAB9FEB 
+  AD2BDB22 6C3DD699 E30C8A3D 9AA12696 31434A02
+  	quit
+!
+!
+!
+!
+!
+!
+!
+!
+license udi pid CSR1000V sn 9EQ5N7YQM0A
+no license smart enable
+diagnostic bootup level minimal
+!
+spanning-tree extend system-id
+!
+netconf-yang
+!
+restconf
+!
+username admin privilege 15 password 0 cisco
+!
+redundancy
+!
+!
+!
+!
+!
+!
+! 
+!
+!
+!
+!
+!
+!
+!
+!
+!
+!
+!
+!
+! 
+! 
+!
+!
+interface Loopback66070077
+ description Loopback 66070077
+ ip address 172.0.77.1 255.255.255.0
+!
+interface GigabitEthernet1
+ ip address 10.0.15.65 255.255.255.0
+ negotiation auto
+ no mop enabled
+ no mop sysid
+!
+interface GigabitEthernet2
+ no ip address
+ shutdown
+ negotiation auto
+ no mop enabled
+ no mop sysid
+!
+interface GigabitEthernet3
+ no ip address
+ shutdown
+ negotiation auto
+ no mop enabled
+ no mop sysid
+!
+interface GigabitEthernet4
+ no ip address
+ shutdown
+ negotiation auto
+ no mop enabled
+ no mop sysid
+!
+ip forward-protocol nd
+ip http server
+ip http authentication local
+ip http secure-server
+ip http client source-interface GigabitEthernet1
+ip route 0.0.0.0 0.0.0.0 10.0.15.1
+!
+ip ssh version 2
+!
+!
+!
+!
+!
+control-plane
+!
+!
+!
+!
+!
+!
+line con 0
+ stopbits 1
+line vty 0 4
+ login local
+ transport input ssh
+line vty 5 15
+ login local
+ transport input ssh
+!
+ntp server pool.ntp.org
+ntp server 34.202.215.187
+!
+!
+!
+!
+!
+end
