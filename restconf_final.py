@@ -1,7 +1,5 @@
 # -*- coding: utf-8 -*-
-import os
-import json
-import requests
+import os, json, requests
 from requests.auth import HTTPBasicAuth
 
 USERNAME = os.getenv("ROUTER_USERNAME", "admin")
@@ -32,7 +30,8 @@ def create(router_ip: str, sid: str):
     url_if = f"{_base(router_ip)}/ietf-interfaces:interfaces/interface={name}"
 
     # pre-check
-    r_chk = requests.get(url_if, headers=HEADERS, auth=HTTPBasicAuth(USERNAME, PASSWORD),
+    r_chk = requests.get(url_if, headers=HEADERS,
+                         auth=HTTPBasicAuth(USERNAME, PASSWORD),
                          verify=False, timeout=15)
     if r_chk.status_code == 200:
         return "already exists"
@@ -45,7 +44,8 @@ def create(router_ip: str, sid: str):
             "ietf-ip:ipv4": {"address": [{"ip": ip, "netmask": _mask(pfx)}]}
         }
     }
-    r = requests.put(url_if, headers=HEADERS, auth=HTTPBasicAuth(USERNAME, PASSWORD),
+    r = requests.put(url_if, headers=HEADERS,
+                     auth=HTTPBasicAuth(USERNAME, PASSWORD),
                      data=json.dumps(payload), verify=False, timeout=20)
     if r.status_code in (200, 201, 204): return "created"
     if r.status_code == 409:             return "already exists"
@@ -55,7 +55,8 @@ def create(router_ip: str, sid: str):
 def delete(router_ip: str, sid: str):
     name = _ifname(sid)
     url = f"{_base(router_ip)}/ietf-interfaces:interfaces/interface={name}"
-    r = requests.delete(url, headers=HEADERS, auth=HTTPBasicAuth(USERNAME, PASSWORD),
+    r = requests.delete(url, headers=HEADERS,
+                        auth=HTTPBasicAuth(USERNAME, PASSWORD),
                         verify=False, timeout=20)
     if r.status_code in (200, 204): return "deleted"
     if r.status_code == 404:        return "not found"
@@ -65,7 +66,8 @@ def enable(router_ip: str, sid: str):
     name = _ifname(sid)
     url = f"{_base(router_ip)}/ietf-interfaces:interfaces/interface={name}"
     payload = {"ietf-interfaces:interface": {"enabled": True}}
-    r = requests.patch(url, headers=HEADERS, auth=HTTPBasicAuth(USERNAME, PASSWORD),
+    r = requests.patch(url, headers=HEADERS,
+                       auth=HTTPBasicAuth(USERNAME, PASSWORD),
                        data=json.dumps(payload), verify=False, timeout=20)
     if r.status_code in (200, 204): return "enabled"
     if r.status_code == 404:        return "not found"
@@ -75,7 +77,8 @@ def disable(router_ip: str, sid: str):
     name = _ifname(sid)
     url = f"{_base(router_ip)}/ietf-interfaces:interfaces/interface={name}"
     payload = {"ietf-interfaces:interface": {"enabled": False}}
-    r = requests.patch(url, headers=HEADERS, auth=HTTPBasicAuth(USERNAME, PASSWORD),
+    r = requests.patch(url, headers=HEADERS,
+                       auth=HTTPBasicAuth(USERNAME, PASSWORD),
                        data=json.dumps(payload), verify=False, timeout=20)
     if r.status_code in (200, 204): return "shutdowned"
     if r.status_code == 404:        return "not found"
@@ -84,7 +87,8 @@ def disable(router_ip: str, sid: str):
 def status(router_ip: str, sid: str):
     name = _ifname(sid)
     url = f"{_base(router_ip)}/ietf-interfaces:interfaces/interface={name}"
-    r = requests.get(url, headers=HEADERS, auth=HTTPBasicAuth(USERNAME, PASSWORD),
+    r = requests.get(url, headers=HEADERS,
+                     auth=HTTPBasicAuth(USERNAME, PASSWORD),
                      verify=False, timeout=20)
     if r.status_code == 404: return "no interface"
     if r.status_code != 200: return f"error {r.status_code} {r.text}"

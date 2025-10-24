@@ -1,9 +1,8 @@
 # -*- coding: utf-8 -*-
 """
-NETCONF helpers for IPA2025 (fixed)
-- เช็ค running-config ทั้ง IETF (ietf-interfaces) และ Cisco native (Cisco-IOS-XE-native)
-- Idempotent: ถ้ามีอยู่แล้ว (ไม่ว่าจะถูกสร้างด้วย RESTCONF/NETCONF) → "already exists"
-- คืนค่าสั้น ๆ ให้ main map เป็นประโยคตามสเปก
+NETCONF helpers (idempotent & method-agnostic)
+- ตรวจจาก running-config ทั้ง IETF และ Cisco Native
+- คืนค่าคงรูป: created / already exists / deleted / not found / enabled / shutdowned / no interface / disabled
 """
 
 import os
@@ -12,7 +11,9 @@ from ncclient import manager
 USERNAME = os.getenv("ROUTER_USERNAME", "admin")
 PASSWORD = os.getenv("ROUTER_PASSWORD", "cisco")
 
-# ---------- utils ----------
+IETF_IF = "urn:ietf:params:xml:ns:yang:ietf-interfaces"
+NATIVE  = "http://cisco.com/ns/yang/Cisco-IOS-XE-native"
+
 def _ifname(sid: str) -> str:
     return f"Loopback{sid}"
 
@@ -22,8 +23,7 @@ def _mask(prefix: int) -> str:
 
 def _sid_ip(sid: str):
     last3 = sid[-3:]
-    x = int(last3[0])
-    y = int(last3[1:])
+    x = int(last3[0]); y = int(last3[1:])
     return f"172.{x}.{y}.1", 24
 
 def _connect(host: str):
@@ -34,29 +34,21 @@ def _connect(host: str):
         allow_agent=False, look_for_keys=False, timeout=20
     )
 
-# ---------- read helpers (เช็คทั้ง IETF และ Native) ----------
-IETF_IF = "urn:ietf:params:xml:ns:yang:ietf-interfaces"
-NATIVE  = "http://cisco.com/ns/yang/Cisco-IOS-XE-native"
-
+# ---------- existence / enabled checks ----------
 def _get_ietf_if_cfg(mgr, name: str) -> str:
     subtree = f"""
       <interfaces xmlns="{IETF_IF}">
-        <interface>
-          <name>{name}</name>
-        </interface>
+        <interface><name>{name}</name></interface>
       </interfaces>
     """.strip()
     rsp = mgr.get_config(source="running", filter=("subtree", subtree))
     return getattr(rsp, "data_xml", str(rsp))
 
 def _get_native_if_cfg(mgr, loop_num: str) -> str:
-    # Native model ใช้ชื่อ interface เป็นเลข loopback เช่น <Loopback><name>6607xxxx</name>
     subtree = f"""
       <native xmlns="{NATIVE}">
         <interface>
-          <Loopback>
-            <name>{loop_num}</name>
-          </Loopback>
+          <Loopback><name>{loop_num}</name></Loopback>
         </interface>
       </native>
     """.strip()
@@ -64,52 +56,36 @@ def _get_native_if_cfg(mgr, loop_num: str) -> str:
     return getattr(rsp, "data_xml", str(rsp))
 
 def _exists(mgr, name: str) -> bool:
-    """
-    ตรวจว่ามี loopback อยู่หรือไม่ โดยค้นจาก running-config แบบกว้าง
-    ครอบคลุมทั้ง IETF และ Cisco native model
-    """
-    # 1. ดึง running-config ทั้งหมด
-    rsp = mgr.get_config(source="running")
-    xml = getattr(rsp, "data_xml", str(rsp))
-
-    # 2. ตรวจเจอชื่อเต็ม หรือชื่อแบบ Native
     loop_num = name.replace("Loopback", "")
-    if f"<name>{name}</name>" in xml:
-        return True
-    if f"<Loopback>" in xml and f"<name>{loop_num}</name>" in xml:
-        return True
-    # 3. บาง IOS XE ใช้ <interface><Loopback><name>...</name></Loopback></interface>
-    if f"<Loopback><name>{loop_num}</name>" in xml:
-        return True
+    # กว้างสุด: ทั้งก้อน running-config
+    xml_all = getattr(mgr.get_config(source="running"), "data_xml", "")
+    if f"<name>{name}</name>" in xml_all: return True
+    if f"<Loopback><name>{loop_num}</name>" in xml_all: return True
+    if f"<name>{loop_num}</name></Loopback>" in xml_all: return True
+    # เฉพาะโมเดล
+    if f"<name>{name}</name>" in _get_ietf_if_cfg(mgr, name): return True
+    if f"<name>{loop_num}</name>" in _get_native_if_cfg(mgr, loop_num): return True
     return False
 
-
 def _enabled(mgr, name: str):
-    # ก่อนอื่นลองดู IETF
     xml_ietf = _get_ietf_if_cfg(mgr, name)
-    if "<enabled>true</enabled>" in xml_ietf:
-        return True
-    if "<enabled>false</enabled>" in xml_ietf:
-        return False
-    # ถ้า IETF ไม่ชัด ลอง Native: ถ้ามี <shutdown/> แปลว่า admin down
+    if "<enabled>true</enabled>" in xml_ietf:  return True
+    if "<enabled>false</enabled>" in xml_ietf: return False
+    # native: ไม่มี enabled/disabled แต่มี <shutdown/>
     loop_num = name.replace("Loopback", "")
     xml_native = _get_native_if_cfg(mgr, loop_num)
-    if "</Loopback>" in xml_native:
-        if "<shutdown" in xml_native or "<shutdown/>" in xml_native:
-            return False
-        # ไม่เจอ shutdown ถือว่า up (Native ไม่ใส่ enabled true/false)
+    if xml_native:
+        if "<shutdown" in xml_native or "<shutdown/>" in xml_native: return False
         return True
-    return None  # unknown
+    return None
 
 # ---------- commands ----------
 def create(router_ip: str, sid: str):
     name = _ifname(sid)
-    ip, pfx = _sid_ip(sid)
-    netmask = _mask(pfx)
+    ip, pfx = _sid_ip(sid); netmask = _mask(pfx)
     with _connect(router_ip) as m:
         if _exists(m, name):
             return "already exists"
-
         cfg = f"""
 <config>
   <interfaces xmlns="{IETF_IF}">
@@ -118,10 +94,7 @@ def create(router_ip: str, sid: str):
       <type xmlns:ianaift="urn:ietf:params:xml:ns:yang:iana-if-type">ianaift:softwareLoopback</type>
       <enabled>true</enabled>
       <ipv4 xmlns="urn:ietf:params:xml:ns:yang:ietf-ip">
-        <address>
-          <ip>{ip}</ip>
-          <netmask>{netmask}</netmask>
-        </address>
+        <address><ip>{ip}</ip><netmask>{netmask}</netmask></address>
       </ipv4>
     </interface>
   </interfaces>
@@ -137,7 +110,6 @@ def delete(router_ip: str, sid: str):
     with _connect(router_ip) as m:
         if not _exists(m, name):
             return "not found"
-
         cfg = f"""
 <config>
   <interfaces xmlns="{IETF_IF}">
@@ -154,16 +126,11 @@ def delete(router_ip: str, sid: str):
 def enable(router_ip: str, sid: str):
     name = _ifname(sid)
     with _connect(router_ip) as m:
-        if not _exists(m, name):
-            return "not found"
-
+        if not _exists(m, name): return "not found"
         cfg = f"""
 <config>
   <interfaces xmlns="{IETF_IF}">
-    <interface>
-      <name>{name}</name>
-      <enabled>true</enabled>
-    </interface>
+    <interface><name>{name}</name><enabled>true</enabled></interface>
   </interfaces>
 </config>
 """.strip()
@@ -174,16 +141,11 @@ def enable(router_ip: str, sid: str):
 def disable(router_ip: str, sid: str):
     name = _ifname(sid)
     with _connect(router_ip) as m:
-        if not _exists(m, name):
-            return "not found"
-
+        if not _exists(m, name): return "not found"
         cfg = f"""
 <config>
   <interfaces xmlns="{IETF_IF}">
-    <interface>
-      <name>{name}</name>
-      <enabled>false</enabled>
-    </interface>
+    <interface><name>{name}</name><enabled>false</enabled></interface>
   </interfaces>
 </config>
 """.strip()
@@ -196,19 +158,16 @@ def status(router_ip: str, sid: str):
     with _connect(router_ip) as m:
         if not _exists(m, name):
             return "no interface"
-
         en = _enabled(m, name)
         if en is True:  return "enabled"
         if en is False: return "disabled"
-
-        # fallback เช็ค oper-status
+        # fallback oper-status
         subtree = f"""
           <interfaces-state xmlns="{IETF_IF}">
             <interface><name>{name}</name></interface>
           </interfaces-state>
         """.strip()
-        rsp = m.get(filter=("subtree", subtree))
-        data = getattr(rsp, "data_xml", str(rsp))
+        data = getattr(m.get(filter=("subtree", subtree)), "data_xml", "")
         if "<oper-status>up</oper-status>" in data:   return "enabled"
         if "<oper-status>down</oper-status>" in data: return "disabled"
         return "disabled"

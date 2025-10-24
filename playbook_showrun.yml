@@ -1,15 +1,36 @@
-- name: Collect running-config and save to local file
-  hosts: routers
+---
+- name: Save running-config
+  hosts: target
+  connection: network_cli
   gather_facts: no
+  vars:
+    ansible_network_os: cisco.ios.ios
+    ansible_user: "{{ router_username }}"
+    ansible_password: "{{ router_password }}"
+    ansible_host: "{{ router_ip }}"
+    ansible_become: no
   tasks:
+    - name: Collect facts (hostname)
+      cisco.ios.ios_facts:
+      register: facts
+
     - name: Get running-config
       cisco.ios.ios_command:
         commands:
           - show running-config
-      register: runout
+      register: shrun
 
-    - name: Save running-config to local file
-      delegate_to: localhost
-      ansible.builtin.copy:
-        content: "{{ runout.stdout[0] }}"
-        dest: "./show_run_66070273_R5-Exam.txt"
+    - name: Make filename
+      set_fact:
+        out_file: "show_run_{{ student_id }}_{{ facts.ansible_facts.ansible_net_hostname }}.txt"
+
+    - name: Save file
+      copy:
+        content: "{{ shrun.stdout[0] }}"
+        dest: "{{ out_file }}"
+
+    - name: Write sentinel for Python caller
+      copy:
+        dest: .ansible_showrun_result.json
+        content: |
+          { "filepath": "{{ out_file }}", "router_name": "{{ facts.ansible_facts.ansible_net_hostname }}" }
