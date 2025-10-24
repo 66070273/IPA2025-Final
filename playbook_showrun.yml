@@ -1,0 +1,15 @@
+- name: Collect running-config and save to local file
+  hosts: routers
+  gather_facts: no
+  tasks:
+    - name: Get running-config
+      cisco.ios.ios_command:
+        commands:
+          - show running-config
+      register: runout
+
+    - name: Save running-config to local file
+      delegate_to: localhost
+      ansible.builtin.copy:
+        content: "{{ runout.stdout[0] }}"
+        dest: "./show_run_66070273_R5-Exam.txt"
