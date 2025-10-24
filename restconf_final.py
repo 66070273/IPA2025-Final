@@ -1,151 +1,117 @@
-import json
+# -*- coding: utf-8 -*-
+"""
+RESTCONF operations for IOS XE using IETF interfaces model.
+All functions must exist and match signatures used by ipa2024_final.py
+
+create(router_ip, student_id, ip_addr, prefix)
+delete(router_ip, student_id)
+enable(router_ip, student_id)
+disable(router_ip, student_id)
+status(router_ip, student_id)
+
+Auth: admin / cisco (do NOT hardcode in main; this is a placeholder commonly used for lab)
+"""
+
 import requests
-requests.packages.urllib3.disable_warnings()
+from requests.auth import HTTPBasicAuth
+import json
 
-# Router IP Address is 10.0.15.181-184
-api_url = "https://10.0.15.65/restconf/data/ietf-interfaces:interfaces/interface=Loopback66070273"
+USERNAME = "admin"
+PASSWORD = "cisco"
 
-# the RESTCONF HTTP headers, including the Accept and Content-Type
-# Two YANG data formats (JSON and XML) work with RESTCONF 
-headers = {
+# IOS XE RESTCONF base
+def _base(router_ip):
+    return f"https://{router_ip}/restconf/data"
+
+HEADERS = {
     "Content-Type": "application/yang-data+json",
-    "Accept": "application/yang-data+json"
+    "Accept": "application/yang-data+json",
 }
-basicauth = ("admin", "cisco")
 
+def _iface_name(student_id: str) -> str:
+    return f"Loopback{student_id}"
 
-def create():
-    yangConfig = {
+def create(router_ip: str, student_id: str, ip_addr: str, prefix: int):
+    name = _iface_name(student_id)
+    url = f"{_base(router_ip)}/ietf-interfaces:interfaces/interface={name}"
+
+    payload = {
         "ietf-interfaces:interface": {
-            "name": "Loopback66070273",
-            "description": "Loopback interface created by RESTCONF",
+            "name": name,
             "type": "iana-if-type:softwareLoopback",
             "enabled": True,
             "ietf-ip:ipv4": {
                 "address": [
-                    {"ip": "172.2.73.1", "netmask": "255.255.255.0"}
+                    {"ip": ip_addr, "netmask": _mask(prefix)}
                 ]
-            },
-            "ietf-ip:ipv6": {}
+            }
         }
     }
 
-    resp = requests.put(
-        api_url, 
-        data=json.dumps(yangConfig), 
-        auth=basicauth, 
-        headers=headers, 
-        verify=False
+    r = requests.put(
+        url, headers=HEADERS, auth=HTTPBasicAuth(USERNAME, PASSWORD),
+        data=json.dumps(payload), verify=False, timeout=20
     )
+    if r.status_code in (200, 201, 204):
+        return "created"
+    if r.status_code == 409:
+        return "already exists"
+    return f"error {r.status_code} {r.text}"
 
-    if(resp.status_code >= 200 and resp.status_code <= 299):
-        print("STATUS OK: {}".format(resp.status_code))
-        return "ok"
+def delete(router_ip: str, student_id: str):
+    name = _iface_name(student_id)
+    url = f"{_base(router_ip)}/ietf-interfaces:interfaces/interface={name}"
+    r = requests.delete(url, headers=HEADERS, auth=HTTPBasicAuth(USERNAME, PASSWORD),
+                        verify=False, timeout=20)
+    if r.status_code in (200, 204):
+        return "deleted"
+    if r.status_code == 404:
+        return "not found"
+    return f"error {r.status_code} {r.text}"
+
+def enable(router_ip: str, student_id: str):
+    name = _iface_name(student_id)
+    url = f"{_base(router_ip)}/ietf-interfaces:interfaces/interface={name}"
+    payload = {"ietf-interfaces:interface": {"enabled": True}}
+    r = requests.patch(url, headers=HEADERS, auth=HTTPBasicAuth(USERNAME, PASSWORD),
+                       data=json.dumps(payload), verify=False, timeout=20)
+    if r.status_code in (200, 204):
+        return "enabled"
+    if r.status_code == 404:
+        return "not found"
+    return f"error {r.status_code} {r.text}"
+
+def disable(router_ip: str, student_id: str):
+    name = _iface_name(student_id)
+    url = f"{_base(router_ip)}/ietf-interfaces:interfaces/interface={name}"
+    payload = {"ietf-interfaces:interface": {"enabled": False}}
+    r = requests.patch(url, headers=HEADERS, auth=HTTPBasicAuth(USERNAME, PASSWORD),
+                       data=json.dumps(payload), verify=False, timeout=20)
+    if r.status_code in (200, 204):
+        return "shutdowned"
+    if r.status_code == 404:
+        return "not found"
+    return f"error {r.status_code} {r.text}"
+
+def status(router_ip: str, student_id: str):
+    name = _iface_name(student_id)
+    # get oper-status & admin-status from ietf-interfaces + ietf-interfaces-state
+    url = f"{_base(router_ip)}/ietf-interfaces:interfaces/interface={name}"
+    r = requests.get(url, headers=HEADERS, auth=HTTPBasicAuth(USERNAME, PASSWORD),
+                     verify=False, timeout=20)
+    if r.status_code == 404:
+        return "no interface"
+    if r.status_code not in (200,):
+        return f"error {r.status_code} {r.text}"
+    data = r.json()
+    enabled = data["ietf-interfaces:interface"].get("enabled", False)
+
+    if enabled:
+        return "enabled"
     else:
-        print('Error. Status Code: {}'.format(resp.status_code))
-        return "error"
+        return "disabled"
 
-
-def delete():
-    # เช็กว่ามี interface อยู่ไหมก่อน
-    pre = requests.get(api_url, auth=basicauth, headers=headers, verify=False)
-    if pre.status_code == 404:
-        return "notfound"
-
-    resp = requests.delete(
-        api_url, 
-        auth=basicauth, 
-        headers=headers, 
-        verify=False
-    )
-
-    if(resp.status_code >= 200 and resp.status_code <= 299):
-        print("STATUS OK: {}".format(resp.status_code))
-        return "ok"
-    else:
-        print('Error. Status Code: {}'.format(resp.status_code))
-        return "error"
-
-
-def enable():
-    yangConfig = {
-        "ietf-interfaces:interface": {
-            "enabled": True
-        }
-    }
-
-    resp = requests.patch(
-        api_url, 
-        data=json.dumps(yangConfig), 
-        auth=basicauth, 
-        headers=headers, 
-        verify=False
-    )
-
-    if(resp.status_code >= 200 and resp.status_code <= 299):
-        print("STATUS OK: {}".format(resp.status_code))
-        return "ok"
-    else:
-        print('Error. Status Code: {}'.format(resp.status_code))
-        return "error"
-
-
-def disable():
-    yangConfig = {
-        "ietf-interfaces:interface": {
-            "enabled": False
-        }
-    }
-
-    resp = requests.patch(
-        api_url, 
-        data=json.dumps(yangConfig), 
-        auth=basicauth, 
-        headers=headers, 
-        verify=False
-    )
-
-    if(resp.status_code >= 200 and resp.status_code <= 299):
-        print("STATUS OK: {}".format(resp.status_code))
-        return "ok"
-    else:
-        print('Error. Status Code: {}'.format(resp.status_code))
-        return "error"
-
-
-def status():
-    api_url_status = "https://10.0.15.65/restconf/data/ietf-interfaces:interfaces-state/interface=Loopback66070273"
-
-    resp = requests.get(
-        api_url_status, 
-        auth=basicauth, 
-        headers=headers, 
-        verify=False
-    )
-
-    if(resp.status_code >= 200 and resp.status_code <= 299):
-        print("STATUS OK: {}".format(resp.status_code))
-        data = resp.json()
-
-        # ในบางเวอร์ชัน key นี้เป็น list, บางเวอร์ชันเป็น dict
-        iface = data.get("ietf-interfaces:interface")
-        if isinstance(iface, list):
-            iface = iface[0] if iface else {}
-
-        admin_status = (iface or {}).get("admin-status")
-        oper_status  = (iface or {}).get("oper-status")
-
-        if admin_status == 'up' and oper_status == 'up':
-            return "Interface loopback 66070273 is enabled"
-        elif admin_status == 'down' and oper_status == 'down':
-            return "Interface loopback 66070273 is disabled"
-        else:
-            # กรณีค่าไม่ครบ/ไม่ตรง spec
-            return f"Interface loopback 66070273 is {admin_status}/{oper_status}"
-
-    elif(resp.status_code == 404):
-        print("STATUS NOT FOUND: {}".format(resp.status_code))
-        return "No Interface loopback 66070273"
-    else:
-        print('Error. Status Code: {}'.format(resp.status_code))
-        return "error"
+def _mask(prefix: int) -> str:
+    # convert /24 -> 255.255.255.0
+    bits = (0xffffffff >> (32 - prefix)) << (32 - prefix)
+    return ".".join(str((bits >> (24 - 8*i)) & 0xff) for i in range(4))

@@ -1,139 +1,280 @@
-#######################################################################################
-# Yourname:
-# Your student ID:
-# Your GitHub Repo: 
-#######################################################################################
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
 
-# 1. Import libraries for API requests, JSON formatting, time, os, (restconf_final or netconf_final), netmiko_final, and ansible_final.
+"""
+IPA2025 Final – Part 1 (update on top of IPA2024)
+Single main file:
+- เลือก method ผ่านข้อความ: /<id> restconf | /<id> netconf
+- สั่งงานจริง: /<id> <router_ip> <command>
+- ถ้าไม่ระบุ method -> "Error: No method specified"
+- ถ้าไม่ระบุ IP     -> "Error: No IP specified"
+- Commands: create | delete | enable | disable | status
+- ส่งข้อความตอบกลับในห้อง Webex เดิม
+
+ENV (ใช้ .env ได้):
+  WEBEX_ACCESS_TOKEN=...
+  WEBEX_ROOM_ID=...
+  STUDENT_ID=66070273
+"""
 
 import os
 import time
-import json
+import logging
+from typing import Dict, Set, Optional
+
 import requests
 from dotenv import load_dotenv
-from restconf_final import create, delete, enable, disable, status
-from requests_toolbelt.multipart.encoder import MultipartEncoder
-from netmiko_final import gigabit_status
-from ansible_final import showrun  # ✅ เพิ่มส่วนนี้เข้ามา
 
-#######################################################################################
-# 2. Assign the Webex access token to the variable ACCESS_TOKEN using environment variables.
+# ใช้ import แบบทั้งโมดูล เพื่อไม่ผูกกับชื่อฟังก์ชันย่อยผิดพลาด
+import restconf_final as restconf
+import netconf_final as netconf
 
-load_dotenv()  # โหลดค่าจากไฟล์ .env (ถ้ามี)
-WEBEX_TOKEN = os.getenv("WEBEX_TOKEN")
+# ----------------- ENV & logging -----------------
+load_dotenv()
+WEBEX_TOKEN   = os.getenv("WEBEX_ACCESS_TOKEN", "").strip()
+WEBEX_ROOM_ID = os.getenv("WEBEX_ROOM_ID", "").strip()
+STUDENT_ID    = os.getenv("STUDENT_ID", "").strip()
 
-if not WEBEX_TOKEN:
-    raise SystemExit("ไม่พบ WEBEX_TOKEN ใน environment/.env")
+if not WEBEX_TOKEN or not WEBEX_ROOM_ID or not STUDENT_ID:
+    raise SystemExit("Missing env: WEBEX_ACCESS_TOKEN / WEBEX_ROOM_ID / STUDENT_ID")
 
-ACCESS_TOKEN = f"Bearer {WEBEX_TOKEN}"
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 
-#######################################################################################
-# 3. Prepare parameters get the latest message for messages API.
+BASE = "https://webexapis.com/v1"
+HEADERS = {"Authorization": f"Bearer {WEBEX_TOKEN}"}
+SEEN_IDS: Set[str] = set()
 
-roomIdToGetMessages = os.getenv("WEBEX_ROOM_ID")
-if not roomIdToGetMessages:
-    raise SystemExit("ไม่พบ WEBEX_ROOM_ID ใน .env")
+# จดจำ method ต่อ user id (/6607xxxx restconf|netconf)
+method_state: Dict[str, Optional[str]] = {}
 
-while True:
-    time.sleep(1)
+VALID_COMMANDS = {"create", "delete", "enable", "disable", "status"}
 
-    getParameters = {"roomId": roomIdToGetMessages, "max": 1}
-    getHTTPHeader = {"Authorization": ACCESS_TOKEN}
+# ----------------- Webex helpers -----------------
+def me_id() -> str:
+    r = requests.get(f"{BASE}/people/me", headers=HEADERS, timeout=15)
+    r.raise_for_status()
+    return r.json()["id"]
 
-    # 4. Webex API: get latest message
-    r = requests.get(
-        "https://webexapis.com/v1/messages",
-        params=getParameters,
-        headers=getHTTPHeader,
-    )
+ME_PERSON_ID = me_id()
 
-    if not r.status_code == 200:
-        raise Exception(f"Incorrect reply from Webex Teams API. Status code: {r.status_code}")
+def send_message(text: str) -> None:
+    try:
+        requests.post(f"{BASE}/messages", headers=HEADERS,
+                      json={"roomId": WEBEX_ROOM_ID, "text": text},
+                      timeout=20).raise_for_status()
+        logging.info("Sent: %s", text)
+    except Exception as e:
+        logging.error("Send failed: %s", e)
 
-    json_data = r.json()
-    if len(json_data["items"]) == 0:
-        raise Exception("There are no messages in the room.")
+def list_messages(limit: int = 30):
+    r = requests.get(f"{BASE}/messages", headers=HEADERS,
+                     params={"roomId": WEBEX_ROOM_ID, "max": limit},
+                     timeout=20)
+    r.raise_for_status()
+    return r.json().get("items", [])
 
-    messages = json_data["items"]
-    message = messages[0]["text"]
-    print("Received message:", message)
+# ----------------- Parse helpers -----------------
+def parse_text(text: str):
+    """
+    รูปแบบที่รองรับ:
+      /<id> restconf
+      /<id> netconf
+      /<id> <ip> <command>
 
-    if message.startswith("/66070273 "):
-        command = message.split(" ")[1].strip()
-        print("Command:", command)
+    return dict:
+      {student_id, method_select, router_ip, command}
+    """
+    if not text:
+        return {}
 
-        #######################################################################################
-        # 5. Logic for each command
-        #######################################################################################
+    parts = text.strip().split()
+    if not parts or not parts[0].startswith("/"):
+        return {}
 
-        if command == "create":
-            responseMessage = create()
-            responseMessage = "Interface loopback 66070273 is created successfully" if responseMessage == "ok" else "Cannot create: Interface loopback 66070273"
+    student_id = parts[0][1:]
+    res = {
+        "student_id": student_id,
+        "method_select": None,
+        "router_ip": None,
+        "command": None
+    }
 
-        elif command == "delete":
-            responseMessage = delete()
-            responseMessage = "Interface loopback 66070273 is deleted successfully" if responseMessage == "ok" else "Cannot delete: Interface loopback 66070273"
+    # method select
+    if len(parts) == 2 and parts[1].lower() in ("restconf", "netconf"):
+        res["method_select"] = parts[1].lower()
+        return res
 
-        elif command == "enable":
-            responseMessage = enable()
-            responseMessage = "Interface loopback 66070273 is enabled successfully" if responseMessage == "ok" else "Cannot enable: Interface loopback 66070273"
+    # /id <ip> <command>
+    if len(parts) >= 2 and parts[1].count(".") == 3:
+        res["router_ip"] = parts[1]
+        if len(parts) >= 3:
+            res["command"] = parts[2].lower()
+        return res
 
-        elif command == "disable":
-            responseMessage = disable()
-            responseMessage = "Interface loopback 66070273 is shutdowned successfully" if responseMessage == "ok" else "Cannot shutdown: Interface loopback 66070273"
+    # อื่นๆ ไม่แมตช์
+    return res
 
-        elif command == "status":
-            responseMessage = status()
+def is_my_id(sid: str) -> bool:
+    return sid == STUDENT_ID
 
-        elif command == "gigabit_status":
-            responseMessage = gigabit_status()
+# ----------------- Message Formatting -----------------
+def fmt_success(cmd: str, sid: str, method: str) -> str:
+    iface = f"Interface loopback {sid}"
+    m = "Restconf" if method == "restconf" else "Netconf"
+    if cmd == "create":
+        return f"{iface} is created successfully using {m}"
+    if cmd == "delete":
+        return f"{iface} is deleted successfully using {m}"
+    if cmd == "enable":
+        return f"{iface} is enabled successfully using {m}"
+    if cmd == "disable":
+        return f"{iface} is shutdowned successfully using {m}"
+    return f"Ok: {m}"
 
-        elif command == "showrun":
-            filename = showrun()  # ✅ เรียกใช้ฟังก์ชันจาก ansible_final.py
-            if filename.endswith(".txt"):
-                responseMessage = "ok"  # ให้ส่วน postData ด้านล่างรู้ว่าต้องแนบไฟล์
-            else:
-                responseMessage = filename  # เช่น 'Error: Ansible'
+def fmt_cannot(cmd: str, sid: str) -> str:
+    iface = f"Interface loopback {sid}"
+    if cmd == "create":
+        return f"Cannot create: {iface}"
+    if cmd == "delete":
+        return f"Cannot delete: {iface}"
+    if cmd == "enable":
+        return f"Cannot enable: {iface}"
+    if cmd == "disable":
+        return f"Cannot shutdown: {iface}"
+    return "Cannot process"
 
+def fmt_status(raw: str, sid: str, method: str) -> str:
+    base = "(checked by Restconf)" if method == "restconf" else "(checked by Netconf)"
+    low = (raw or "").lower()
+
+    if any(k in low for k in ["no interface", "not found", "absent"]):
+        return f"No Interface loopback {sid} {base}"
+    if "enabled" in low or "up" in low:
+        return f"Interface loopback {sid} is enabled {base}"
+    if any(k in low for k in ["disabled", "shutdown", "down"]):
+        return f"Interface loopback {sid} is disabled {base}"
+    return f"Interface loopback {sid} is {raw} {base}"
+
+def interpret(cmd: str, sid: str, method: str, raw: str) -> str:
+    if cmd == "status":
+        return fmt_status(raw, sid, method)
+
+    low = (raw or "").lower()
+    cannot_markers = ["already exists", "cannot", "not found", "absent",
+                      "does not exist", "error", "failed"]
+    if any(k in low for k in cannot_markers):
+        return fmt_cannot(cmd, sid)
+
+    # assume success
+    return fmt_success(cmd, sid, method)
+
+# ----------------- Dispatch -----------------
+def do_restconf(cmd: str, ip: str, sid: str) -> str:
+    try:
+        if cmd == "create":
+            raw = restconf.create(ip, sid)
+        elif cmd == "delete":
+            raw = restconf.delete(ip, sid)
+        elif cmd == "enable":
+            raw = restconf.enable(ip, sid)
+        elif cmd == "disable":
+            raw = restconf.disable(ip, sid)
+        elif cmd == "status":
+            raw = restconf.status(ip, sid)
         else:
-            responseMessage = "Error: No command or unknown command"
+            return "Error: No command found."
+        return interpret(cmd, sid, "restconf", raw)
+    except Exception as e:
+        logging.exception("RESTCONF %s failed: %s", cmd, e)
+        return f"Error: {e}"
 
-        #######################################################################################
-        # 6. Post message (ส่งกลับไปยัง Webex Room)
-        #######################################################################################
-
-        if command == "showrun" and responseMessage == 'ok':
-            # ใช้ชื่อไฟล์จริงจาก showrun()
-            fileobject = open(filename, "rb")
-            filetype = "text/plain"
-
-            postData = {
-                "roomId": roomIdToGetMessages,
-                "text": "show running config",
-                "files": (filename, fileobject, filetype),
-            }
-
-            postData = MultipartEncoder(postData)
-            HTTPHeaders = {
-                "Authorization": ACCESS_TOKEN,
-                "Content-Type": postData.content_type,
-            }
-
+def do_netconf(cmd: str, ip: str, sid: str) -> str:
+    try:
+        if cmd == "create":
+            raw = netconf.create(ip, sid)
+        elif cmd == "delete":
+            raw = netconf.delete(ip, sid)
+        elif cmd == "enable":
+            raw = netconf.enable(ip, sid)
+        elif cmd == "disable":
+            raw = netconf.disable(ip, sid)
+        elif cmd == "status":
+            raw = netconf.status(ip, sid)
         else:
-            postData = {"roomId": roomIdToGetMessages, "text": responseMessage}
-            postData = json.dumps(postData)
-            HTTPHeaders = {
-                "Authorization": ACCESS_TOKEN,
-                "Content-Type": "application/json"
-            }
+            return "Error: No command found."
+        return interpret(cmd, sid, "netconf", raw)
+    except Exception as e:
+        logging.exception("NETCONF %s failed: %s", cmd, e)
+        return f"Error: {e}"
 
-        r = requests.post(
-            "https://webexapis.com/v1/messages",
-            data=postData,
-            headers=HTTPHeaders,
-        )
+# ----------------- Core handler -----------------
+def handle_text(text: str) -> None:
+    p = parse_text(text)
+    if not p or "student_id" not in p:
+        return
 
-        if not r.status_code == 200:
-            raise Exception(f"Incorrect reply from Webex Teams API. Status code: {r.status_code}")
-        else:
-            print("Message sent successfully!")
+    sid = p["student_id"]
+    if not is_my_id(sid):
+        return
+
+    # set method
+    if p["method_select"]:
+        method_state[sid] = p["method_select"]
+        send_message(f"Ok: {p['method_select'].capitalize()}")
+        return
+
+    # require method first
+    if method_state.get(sid) is None:
+        send_message("Error: No method specified")
+        return
+
+    # require IP
+    ip = p.get("router_ip")
+    if not ip:
+        send_message("Error: No IP specified")
+        return
+
+    # require command
+    cmd = p.get("command")
+    if not cmd or cmd not in VALID_COMMANDS:
+        send_message("Error: No command found.")
+        return
+
+    # dispatch
+    method = method_state[sid]
+    if method == "restconf":
+        send_message(do_restconf(cmd, ip, sid))
+    elif method == "netconf":
+        send_message(do_netconf(cmd, ip, sid))
+    else:
+        send_message("Error: No method specified")
+
+# ----------------- Main loop -----------------
+def main():
+    logging.info("IPA2025 Part1 bot running | Room=%s | StudentID=%s", WEBEX_ROOM_ID, STUDENT_ID)
+    while True:
+        try:
+            items = list_messages(limit=30)
+            for m in reversed(items):
+                mid = m.get("id")
+                if mid in SEEN_IDS:
+                    continue
+                SEEN_IDS.add(mid)
+
+                # skip my own
+                if m.get("personId") == ME_PERSON_ID:
+                    continue
+
+                text = (m.get("text") or "").strip()
+                if not text:
+                    continue
+
+                if text.startswith(f"/{STUDENT_ID}"):
+                    logging.info("Recv: %s", text)
+                    handle_text(text)
+        except Exception as e:
+            logging.exception("loop error: %s", e)
+        time.sleep(3)
+
+if __name__ == "__main__":
+    main()
