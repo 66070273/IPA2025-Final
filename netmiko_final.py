@@ -1,18 +1,10 @@
-# -*- coding: utf-8 -*-
-"""
-Netmiko helpers
-- showrun(): คืน running-config
-- gigabit_status(): สรุปสถานะพอร์ต GigabitEthernet ทั้งหมดแบบ:
-  Gi1 up, Gi2 administratively down, ... -> X up, Y down, Z administratively down
-"""
-
 import os, re
 from netmiko import ConnectHandler
 from typing import Optional
 
 USERNAME = os.getenv("ROUTER_USERNAME", "admin")
 PASSWORD = os.getenv("ROUTER_PASSWORD", "cisco")
-NET_TEMPLATES = os.getenv("NET_TEXTFSM")  # ถ้ามี ntc-templates ใส่ path ไว้ จะ parse สวยขึ้น
+NET_TEMPLATES = os.getenv("NET_TEXTFSM")
 
 def _connect(ip: str):
     dev = {
@@ -37,11 +29,9 @@ def gigabit_status(ip: str) -> str:
     """
     import re
     with _connect(ip) as conn:
-        # 1) ยิงแบบ include เพื่อลด noise ก่อน
         raw = conn.send_command("show ip interface brief | include GigabitEthernet",
                                 use_textfsm=False, delay_factor=1.0)
         if not raw.strip():
-            # 2) fallback: ดึงทั้งก้อน
             raw = conn.send_command("show ip interface brief",
                                     use_textfsm=False, delay_factor=1.0)
 
@@ -50,54 +40,43 @@ def gigabit_status(ip: str) -> str:
         s = line.strip()
         if not s:
             continue
-        # จับเฉพาะบรรทัดที่พูดถึง Gi*
         if ("GigabitEthernet" in s) or re.match(r"^Gi[\d/]+", s):
             lines.append(s)
 
     if not lines:
-        # สุดท้ายจริงๆ ลองใช้ show interfaces status
         with _connect(ip) as conn:
             raw2 = conn.send_command("show interfaces status | include Gi|Gigabit",
                                      use_textfsm=False, delay_factor=1.0)
         for line in raw2.splitlines():
             s = line.strip()
             if s.startswith(("Gi", "Gigabit")):
-                # show interfaces status ไม่มีคำว่า "administratively down"
-                # ส่วนใหญ่จะเป็น connected / notconnect / disabled
                 parts = s.split()
                 if parts:
                     ifname = parts[0]
                     stat_l = " ".join(parts[1:]).lower()
-                    # map คร่าว ๆ
                     if "connected" in stat_l:
                         status = "up"
                     elif "disabled" in stat_l or "err-disabled" in stat_l:
                         status = "administratively down"
                     else:
                         status = "down"
-                    lines.append(f"{ifname} - - - {status} -")  # ให้ parser ด้านล่างอ่านได้
+                    lines.append(f"{ifname} - - - {status} -")
 
     if not lines:
         return "No GigabitEthernet found"
 
-    # parse เป็น (ifname, status)
     items = []
     for s in lines:
-        # รูปแบบมาตรฐาน: IF IP OK? Method Status Protocol
-        # status อาจเป็นสองคำ (administratively down)
         parts = s.split()
         if len(parts) < 5:
-            # พยายามดึงชื่อ iface
             m = re.match(r"^(GigabitEthernet[\d/]+|Gi[\d/]+)", s)
             ifname = m.group(1) if m else parts[0]
             items.append((ifname, "down"))
             continue
 
         ifname = parts[0]
-        # status = join คอลัมน์ก่อนสุดท้ายทั้งหมด
         status = " ".join(parts[4:-1]).strip().lower() if len(parts) > 5 else parts[4].lower()
 
-        # normalize
         if "administratively down" in status:
             st = "administratively down"
         elif "up" in status:
@@ -107,17 +86,14 @@ def gigabit_status(ip: str) -> str:
 
         items.append((ifname, st))
 
-    # สรุปผล
     pieces, up, down, admin = [], 0, 0, 0
-    # เรียงชื่อให้สวย (Gi1, Gi2, … ก่อน)
-    def _key(t):  # ('GigabitEthernet1/0/1', 'up') -> tuple of ints
+    def _key(t):
         import re
         nums = re.findall(r"\d+", t[0])
         return tuple(int(n) for n in nums) if nums else (9999,)
     items.sort(key=_key)
 
     for ifname, st in items:
-        # ใช้ชื่อเต็ม GigabitEthernet... เพื่อความชัดเจน
         if ifname.startswith("Gi"):
             ifname = ifname.replace("Gi", "GigabitEthernet")
         if st == "up":
@@ -139,7 +115,6 @@ def gigabit_status(ip: str) -> str:
         except Exception:
             rows = None
         if not rows or isinstance(rows, str):
-            # fallback raw, parse แบบง่าย
             raw = conn.send_command("show ip interface brief", use_textfsm=False, delay_factor=1.0)
             rows = []
             for line in raw.splitlines():
@@ -153,12 +128,10 @@ def gigabit_status(ip: str) -> str:
                             "protocol": parts[-1],
                         })
 
-    # คัดเฉพาะ GigabitEthernet*
     gi = [r for r in rows if str(r.get("intf","")).lower().startswith(("gigabit", "gi"))]
     if not gi:
         return "No GigabitEthernet found"
 
-    # รวบรวมสถานะ
     pieces = []
     up = down = admin = 0
     for r in gi:
@@ -183,23 +156,16 @@ def get_motd(ip: str) -> Optional[str]:
     คืนข้อความ MOTD ถ้าเจอ, ถ้าไม่พบให้คืน None
     """
     with _connect(ip) as conn:
-        # 1) วิธีหลัก: show banner motd
         out1 = conn.send_command("show banner motd", use_textfsm=False, delay_factor=1.0)
         if out1 is not None:
             s = out1.strip()
             low = s.lower()
-            # บางเครื่องจะพิมพ์ว่า "no such banner" / "not set" / ว่าง
             if s and ("no such banner" not in low) and ("not set" not in low):
                 return s
 
-        # 2) fallback: parse running-config
         out2 = conn.send_command("show running-config | section banner motd",
                                  use_textfsm=False, delay_factor=1.0)
         if out2 and "banner motd" in out2:
-            # รูปทั่วไป:
-            # banner motd ^C
-            # <ข้อความหลายบรรทัด>
-            # ^C
             m = re.search(r"banner\s+motd\s+(\S)\r?\n(.*?)\r?\n\1",
                           out2, re.DOTALL | re.IGNORECASE)
             if m:
@@ -207,13 +173,11 @@ def get_motd(ip: str) -> Optional[str]:
                 if body:
                     return body
 
-            # เผื่อบางเครื่องเว้นบรรทัด/มีช่องว่าง
             m2 = re.search(r"banner\s+motd\s+(.)(.*?)(?:\r?\n\1|\1\r?\n)$",
                            out2, re.DOTALL | re.IGNORECASE)
             if m2:
                 body = m2.group(2).strip()
                 if body:
-                    # เอา delimiter ที่ต้น/ท้ายออกถ้าหลงเหลือ
                     body = re.sub(r"^\s*[\^#!%/|].*\n", "", body).strip()
                     body = re.sub(r"\n\s*[\^#!%/|]\s*$", "", body).strip()
                     if body:

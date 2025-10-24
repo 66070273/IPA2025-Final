@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 import os, json, requests
 from requests.auth import HTTPBasicAuth
 

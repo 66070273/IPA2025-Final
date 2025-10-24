@@ -1,10 +1,3 @@
-# -*- coding: utf-8 -*-
-"""
-NETCONF helpers (idempotent & method-agnostic)
-- ตรวจจาก running-config ทั้ง IETF และ Cisco Native
-- คืนค่าคงรูป: created / already exists / deleted / not found / enabled / shutdowned / no interface / disabled
-"""
-
 import os
 from ncclient import manager
 
@@ -57,12 +50,10 @@ def _get_native_if_cfg(mgr, loop_num: str) -> str:
 
 def _exists(mgr, name: str) -> bool:
     loop_num = name.replace("Loopback", "")
-    # กว้างสุด: ทั้งก้อน running-config
     xml_all = getattr(mgr.get_config(source="running"), "data_xml", "")
     if f"<name>{name}</name>" in xml_all: return True
     if f"<Loopback><name>{loop_num}</name>" in xml_all: return True
     if f"<name>{loop_num}</name></Loopback>" in xml_all: return True
-    # เฉพาะโมเดล
     if f"<name>{name}</name>" in _get_ietf_if_cfg(mgr, name): return True
     if f"<name>{loop_num}</name>" in _get_native_if_cfg(mgr, loop_num): return True
     return False
@@ -71,7 +62,6 @@ def _enabled(mgr, name: str):
     xml_ietf = _get_ietf_if_cfg(mgr, name)
     if "<enabled>true</enabled>" in xml_ietf:  return True
     if "<enabled>false</enabled>" in xml_ietf: return False
-    # native: ไม่มี enabled/disabled แต่มี <shutdown/>
     loop_num = name.replace("Loopback", "")
     xml_native = _get_native_if_cfg(mgr, loop_num)
     if xml_native:
@@ -161,7 +151,6 @@ def status(router_ip: str, sid: str):
         en = _enabled(m, name)
         if en is True:  return "enabled"
         if en is False: return "disabled"
-        # fallback oper-status
         subtree = f"""
           <interfaces-state xmlns="{IETF_IF}">
             <interface><name>{name}</name></interface>

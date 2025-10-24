@@ -1,13 +1,10 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
-
 import os, time, logging, requests
 from typing import Dict, Optional, Set
 from dotenv import load_dotenv
 
 import restconf_final as restconf
 import netconf_final as netconf
-import ansible_final as ansible_runner   # NEW
+import ansible_final as ansible_runner
 
 load_dotenv()
 
@@ -123,9 +120,8 @@ def handle_text(text: str) -> None:
         return
     sid = p["student_id"]
     if sid != STUDENT_ID:
-        return  # ตอบเฉพาะของเรา
+        return
 
-    # 1)เลือก method ต้องมาก่อนการตรวจ IP/command เสมอ
     if p.get("method_select"):
         method_state[sid] = p["method_select"]
         send_message(f"Ok: {p['method_select'].capitalize()}")
@@ -134,28 +130,24 @@ def handle_text(text: str) -> None:
     ip  = p.get("router_ip")
     cmd = p.get("command")
 
-    # 2) ต้องมี command เสมอ (ทุกรูปแบบ)
     if not cmd:
         send_message("Error: No command found.")
         return
 
-    # 3) ต้องมี IP เสมอ (ทั้ง part1 และ part2)
     if not ip or ip not in ALLOWED_IPS:
         send_message("Error: No IP specified")
         return
 
-    # 4) คำสั่งที่ "ไม่ต้องพึ่ง method" (Part 2 + utility)
     if cmd == "motd":
-        # รูปแบบ: "/<sid> <ip> motd <ข้อความ...>" หรือไม่มีข้อความ
         parts = text.strip().split(" ", 3)
         motd_msg = parts[3] if len(parts) == 4 else None
-        if motd_msg:  # set MOTD ด้วย Ansible
+        if motd_msg:
             try:
                 ok = ansible_runner.run_set_motd(ip, motd_msg)
                 send_message("Ok: success" if ok else "Error: Ansible")
             except Exception:
                 send_message("Error: Ansible")
-        else:        # read MOTD ด้วย Netmiko/TextFSM
+        else:
             try:
                 from netmiko_final import get_motd
                 msg = get_motd(ip)
@@ -181,7 +173,6 @@ def handle_text(text: str) -> None:
             send_message("Error: Ansible")
         return
 
-    # 5) คำสั่ง Part 1 (ต้องเลือก method ไว้ก่อน)
     if method_state.get(sid) is None:
         send_message("Error: No method specified")
         return

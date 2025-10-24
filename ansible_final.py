@@ -1,17 +1,10 @@
-# -*- coding: utf-8 -*-
-"""
-Run Ansible playbook to save running-config into
-  show_run_[studentID]_[router_name].txt
-Return: (ok: bool, filepath: str|None, router_name: str|None)
-"""
-
 import os, subprocess, json, tempfile, pathlib
 
 ROUTER_USERNAME = os.getenv("ROUTER_USERNAME", "admin")
 ROUTER_PASSWORD = os.getenv("ROUTER_PASSWORD", "cisco")
 
-PLAYBOOK = "playbook_showrun.yml"   # ต้องอยู่ในโฟลเดอร์เดียวกัน
-INVENTORY = "hosts"                 # ใช้ host: target
+PLAYBOOK = "playbook_showrun.yml"  
+INVENTORY = "hosts"              
 
 def run_showrun(router_ip: str, student_id: str):
     env = os.environ.copy()
@@ -36,7 +29,6 @@ def run_showrun(router_ip: str, student_id: str):
     if proc.returncode != 0:
         return False, None, None
 
-    # playbook จะบอก path กับ hostname ออกมาในไฟล์ sentinel .json
     sentinel = pathlib.Path(".ansible_showrun_result.json")
     if not sentinel.exists():
         return False, None, None
