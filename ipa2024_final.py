@@ -23,7 +23,7 @@ HEADERS = {"Authorization": f"Bearer {WEBEX_TOKEN}"}
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 
 ALLOWED_IPS = {f"10.0.15.{i}" for i in range(61, 66)}
-VALID_COMMANDS = {"create", "delete", "enable", "disable", "status", "showrun", "gigabit_status"}
+VALID_COMMANDS = {"create", "delete", "enable", "disable", "status", "showrun", "gigabit_status", "motd"}
 method_state: Dict[str, Optional[str]] = {}
 SEEN_IDS: Set[str] = set()
 
@@ -125,27 +125,45 @@ def handle_text(text: str) -> None:
     if sid != STUDENT_ID:
         return  # ตอบเฉพาะของเรา
 
-    # set method
-    if p["method_select"]:
-        method_state[sid] = p["method_select"]
-        send_message(f"Ok: {p['method_select'].capitalize()}")
+    ip = p.get("router_ip")
+    cmd = p.get("command")
+
+    # ----- ตรวจรูปแบบพื้นฐาน -----
+    if not cmd:
+        send_message("Error: No command found.")
+        return
+    if cmd not in VALID_COMMANDS:
+        send_message("Error: No command found.")
+        return
+    if not ip:
+        send_message("Error: No IP specified")
+        return
+    if ip not in ALLOWED_IPS:
+        send_message("Error: No IP specified")
         return
 
-    # required checks
-    if method_state.get(sid) is None:
-        send_message("Error: No method specified"); return
-    ip = p.get("router_ip")
-    if not ip:
-        send_message("Error: No IP specified"); return
-    if ip not in ALLOWED_IPS:
-        send_message("Error: No IP specified"); return
-    cmd = p.get("command")
-    if not cmd:
-        send_message("Error: No command found."); return
-    if cmd not in VALID_COMMANDS:
-        send_message("Error: No command found."); return
+    # ----- คำสั่ง Part 2: motd -----
+    if cmd == "motd":
+        # รูปแบบข้อความ: "/<sid> <ip> motd <ข้อความ...>"  (อาจไม่มีข้อความ)
+        parts = text.strip().split(" ", 3)
+        motd_msg = parts[3] if len(parts) == 4 else None
 
-    # reporting commands (ไม่เปลี่ยนคอนฟิก)
+        if motd_msg:  # ตั้งค่า MOTD ด้วย Ansible
+            try:
+                ok = ansible_runner.run_set_motd(ip, motd_msg)
+                send_message("Ok: success" if ok else "Error: Ansible")
+            except Exception:
+                send_message("Error: Ansible")
+        else:        # อ่านค่า MOTD ด้วย Netmiko/TextFSM
+            try:
+                from netmiko_final import get_motd
+                msg = get_motd(ip)
+                send_message(msg if msg else "Error: No MOTD Configured")
+            except Exception:
+                send_message("Error: No MOTD Configured")
+        return
+
+    # ----- reporting cmds (เดิม) -----
     if cmd == "gigabit_status":
         try:
             from netmiko_final import gigabit_status
@@ -163,7 +181,10 @@ def handle_text(text: str) -> None:
             send_message("Error: Ansible")
         return
 
-    # part1 commands (เปลี่ยนคอนฟิก)
+    # ----- Part1 (ต้องมี method) -----
+    if method_state.get(sid) is None:
+        send_message("Error: No method specified"); return
+
     method = method_state[sid]
     if method == "restconf":
         send_message(do_restconf(cmd, ip, sid))
