@@ -8,6 +8,7 @@ Netmiko helpers
 
 import os, re
 from netmiko import ConnectHandler
+from typing import Optional
 
 USERNAME = os.getenv("ROUTER_USERNAME", "admin")
 PASSWORD = os.getenv("ROUTER_PASSWORD", "cisco")
@@ -173,35 +174,49 @@ def gigabit_status(ip: str) -> str:
     summary = f"{up} up, {down} down, {admin} administratively down"
     return f"{', '.join(pieces)} -> {summary}"
 
-def get_motd(ip: str) -> str | None:
+def get_motd(ip: str) -> Optional[str]:
     """
-    อ่าน MOTD บนอุปกรณ์ IOS XE
-    ลอง 2 วิธี:
-      1) show running-config | section banner motd  (จับ delimiter ^X ... ^X)
-      2) show banner motd
-    คืนสตริงข้อความ หรือ None ถ้าไม่พบ
+    อ่าน MOTD บนอุปกรณ์ IOS XE ให้พยายามวิธีที่เสถียรก่อน:
+      1) 'show banner motd'  (ส่วนใหญ่จะพิมพ์ข้อความออกมาตรงๆ)
+      2) fallback: 'show running-config | section banner motd'
+         รองรับ delimiter ทุกตัว เช่น ^C, !, %, # และหลายบรรทัด
+    คืนข้อความ MOTD ถ้าเจอ, ถ้าไม่พบให้คืน None
     """
-    import re
     with _connect(ip) as conn:
-        # วิธีหลัก: อ่านจาก running-config
-        out = conn.send_command("show running-config | section banner motd", use_textfsm=False, delay_factor=1.0)
-        if out and "banner motd" in out:
-            # รูปแบบปกติ:
+        # 1) วิธีหลัก: show banner motd
+        out1 = conn.send_command("show banner motd", use_textfsm=False, delay_factor=1.0)
+        if out1 is not None:
+            s = out1.strip()
+            low = s.lower()
+            # บางเครื่องจะพิมพ์ว่า "no such banner" / "not set" / ว่าง
+            if s and ("no such banner" not in low) and ("not set" not in low):
+                return s
+
+        # 2) fallback: parse running-config
+        out2 = conn.send_command("show running-config | section banner motd",
+                                 use_textfsm=False, delay_factor=1.0)
+        if out2 and "banner motd" in out2:
+            # รูปทั่วไป:
             # banner motd ^C
             # <ข้อความหลายบรรทัด>
             # ^C
-            m = re.search(r"banner\s+motd\s+(\S)\r?\n(.*?)\r?\n\1", out, re.DOTALL | re.IGNORECASE)
+            m = re.search(r"banner\s+motd\s+(\S)\r?\n(.*?)\r?\n\1",
+                          out2, re.DOTALL | re.IGNORECASE)
             if m:
                 body = m.group(2).strip()
-                return body if body else None
+                if body:
+                    return body
 
-        # วิธีสำรอง: show banner motd (อาจพิมพ์ตรง ๆ หรือบอกว่าไม่มี)
-        out2 = conn.send_command("show banner motd", use_textfsm=False, delay_factor=1.0)
-        if out2:
-            low = out2.strip().lower()
-            if "no such banner" in low or "not set" in low or out2.strip() == "":
-                return None
-            return out2.strip()
+            # เผื่อบางเครื่องเว้นบรรทัด/มีช่องว่าง
+            m2 = re.search(r"banner\s+motd\s+(.)(.*?)(?:\r?\n\1|\1\r?\n)$",
+                           out2, re.DOTALL | re.IGNORECASE)
+            if m2:
+                body = m2.group(2).strip()
+                if body:
+                    # เอา delimiter ที่ต้น/ท้ายออกถ้าหลงเหลือ
+                    body = re.sub(r"^\s*[\^#!%/|].*\n", "", body).strip()
+                    body = re.sub(r"\n\s*[\^#!%/|]\s*$", "", body).strip()
+                    if body:
+                        return body
 
     return None
-
