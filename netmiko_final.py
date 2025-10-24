@@ -172,3 +172,36 @@ def gigabit_status(ip: str) -> str:
 
     summary = f"{up} up, {down} down, {admin} administratively down"
     return f"{', '.join(pieces)} -> {summary}"
+
+def get_motd(ip: str) -> str | None:
+    """
+    อ่าน MOTD บนอุปกรณ์ IOS XE
+    ลอง 2 วิธี:
+      1) show running-config | section banner motd  (จับ delimiter ^X ... ^X)
+      2) show banner motd
+    คืนสตริงข้อความ หรือ None ถ้าไม่พบ
+    """
+    import re
+    with _connect(ip) as conn:
+        # วิธีหลัก: อ่านจาก running-config
+        out = conn.send_command("show running-config | section banner motd", use_textfsm=False, delay_factor=1.0)
+        if out and "banner motd" in out:
+            # รูปแบบปกติ:
+            # banner motd ^C
+            # <ข้อความหลายบรรทัด>
+            # ^C
+            m = re.search(r"banner\s+motd\s+(\S)\r?\n(.*?)\r?\n\1", out, re.DOTALL | re.IGNORECASE)
+            if m:
+                body = m.group(2).strip()
+                return body if body else None
+
+        # วิธีสำรอง: show banner motd (อาจพิมพ์ตรง ๆ หรือบอกว่าไม่มี)
+        out2 = conn.send_command("show banner motd", use_textfsm=False, delay_factor=1.0)
+        if out2:
+            low = out2.strip().lower()
+            if "no such banner" in low or "not set" in low or out2.strip() == "":
+                return None
+            return out2.strip()
+
+    return None
+
