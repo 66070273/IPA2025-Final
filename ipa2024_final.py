@@ -1,7 +1,6 @@
 import os, time, logging, requests
 from typing import Dict, Optional, Set
 from dotenv import load_dotenv
-
 import restconf_final as restconf
 import netconf_final as netconf
 import ansible_final as ansible_runner
@@ -130,13 +129,15 @@ def handle_text(text: str) -> None:
     ip  = p.get("router_ip")
     cmd = p.get("command")
 
+    if not ip or ip not in ALLOWED_IPS:
+        send_message("Error: No IP specified")
+        return
+
     if not cmd:
         send_message("Error: No command found.")
         return
 
-    if not ip or ip not in ALLOWED_IPS:
-        send_message("Error: No IP specified")
-        return
+    
 
     if cmd == "motd":
         parts = text.strip().split(" ", 3)
